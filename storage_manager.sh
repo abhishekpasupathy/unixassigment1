@@ -2,9 +2,9 @@
 # Quota-Aware User Storage Manager — read-only by default.
 set -o nounset
 set -o pipefail
-ROOT="$(cd -- "$(dirname -- "\${BASH_SOURCE[0]}")" && pwd -P)"
-CONFIG_FILE="\${CONFIG_FILE:-$ROOT/config/users.conf}"
-REPORT_DIR="\${REPORT_DIR:-$ROOT/reports}"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+CONFIG_FILE="${CONFIG_FILE:-$ROOT/config/users.conf}"
+REPORT_DIR="${REPORT_DIR:-$ROOT/reports}"
 TOP_N=5
 LARGE_FILE_MB=10
 APPLY_MODE=0
@@ -77,7 +77,7 @@ scan_user(){
   printf '\nLargest files (top %s):\n' "$TOP_N"
   while IFS= read -r -d '' rec; do
     local size path
-    size="\${rec%%$'\t'*}"; path="\${rec#*$'\t'}"
+    size="${rec%%$'\t'*}"; path="${rec#*$'\t'}"
     [[ "$size" =~ ^[0-9]+$ ]] && printf '  %-10s %s\n' "$(human_size "$((size/1024))")" "$path"
   done < <(find "$home" -xdev -type f -printf '%s\t%p\0' 2>/dev/null | sort -z -nr | head -z -n "$TOP_N")
 
@@ -85,7 +85,7 @@ scan_user(){
   printf '\nDry-run cleanup candidates (at least %s MB):\n' "$LARGE_FILE_MB"
   while IFS= read -r -d '' rec; do
     local size path
-    size="\${rec%%$'\t'*}"; path="\${rec#*$'\t'}"
+    size="${rec%%$'\t'*}"; path="${rec#*$'\t'}"
     [[ "$size" =~ ^[0-9]+$ ]] || continue
     ((count+=1))
     printf '  [PLAN ONLY] %s  %s\n' "$(human_size "$((size/1024))")" "$path"
@@ -97,7 +97,7 @@ scan_user(){
     echo "Interactive cleanup: deletion is permanent; review every path."
     while IFS= read -r -d '' rec; do
       local size path answer canonical_home canonical_target
-      size="\${rec%%$'\t'*}"; path="\${rec#*$'\t'}"
+      size="${rec%%$'\t'*}"; path="${rec#*$'\t'}"
       canonical_home="$(cd -- "$home" && pwd -P)" || continue
       [[ -f "$path" && ! -L "$path" ]] || { log "Skipping symlink/non-file: $path"; continue; }
       canonical_target="$(realpath -- "$path" 2>/dev/null)" || continue
@@ -116,13 +116,13 @@ printf 'Quota-Aware User Storage Manager\nGenerated: %s\nConfiguration: %s\n' "$
 if ((APPLY_MODE && !REPORT_ONLY)); then echo "Mode: interactive per-file confirmation" | tee -a "$REPORT"; else echo "Mode: read-only dry run" | tee -a "$REPORT"; fi
 
 line_no=0
-while IFS='|' read -r user home quota warning extra || [[ -n "\${user:-}" ]]; do
+while IFS='|' read -r user home quota warning extra || [[ -n "${user:-}" ]]; do
   ((line_no+=1))
   user="$(printf '%s' "$user" | tr -d '[:space:]')"
   quota="$(printf '%s' "$quota" | tr -d '[:space:]')"
   warning="$(printf '%s' "$warning" | tr -d '[:space:]')"
   [[ -z "$user" || "$user" == \#* ]] && continue
-  if [[ -n "\${extra:-}" || "$home" != /* ]] || ! valid_uint "$quota" || ! valid_uint "$warning"; then
+  if [[ -n "${extra:-}" || "$home" != /* ]] || ! valid_uint "$quota" || ! valid_uint "$warning"; then
     log "Invalid configuration at line $line_no; expected username|absolute_home|quota_MB|warning_percent"; continue
   fi
   if ((quota<=0 || warning<=0 || warning>=100)); then log "Invalid quota/threshold at line $line_no"; continue; fi
