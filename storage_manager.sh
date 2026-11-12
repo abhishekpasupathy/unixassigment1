@@ -37,7 +37,7 @@ while (($#)); do
   esac
 done
 [[ "$TOP_N" =~ ^[1-9][0-9]*$ ]] || die "--top must be positive"
-[[ "$LARGE_FILE_MB" =~ ^[0-9]+$ ]] || die "--large-file-mb must be non-negative"
+[[ "$LARGE_FILE_MB" =~ ^[1-9][0-9]*$ ]] || die "--large-file-mb must be a positive integer"
 [[ -r "$CONFIG_FILE" ]] || die "Cannot read $CONFIG_FILE"
 for cmd in getent du find sort awk head realpath; do command -v "$cmd" >/dev/null 2>&1 || die "$cmd is required"; done
 mkdir -p -- "$REPORT_DIR" || die "Cannot create report directory"
@@ -59,7 +59,7 @@ scan_user(){
   if [[ ! -d "$home" || ! -r "$home" || ! -x "$home" ]]; then log "WARNING: home missing or unreadable: $home"; return; fi
   usage_kb="$(du -skx -- "$home" 2>/dev/null | awk 'NR==1{print $1}')"
   [[ "$usage_kb" =~ ^[0-9]+$ ]] || { log "WARNING: cannot calculate usage for $user"; return; }
-  usage_mb=$((usage_kb/1024)); pct=$((usage_mb*100/quota))
+  usage_mb=$((usage_kb/1024)); pct=$((usage_kb*100/(quota*1024)))
   if ((pct>=100)); then status="QUOTA EXCEEDED"; elif ((pct>=warning)); then status="WARNING"; else status="OK"; fi
 
   printf '\n============================================================\nUSER: %s\nHOME: %s\nQUOTA: %s MB\n' "$user" "$home" "$quota"
