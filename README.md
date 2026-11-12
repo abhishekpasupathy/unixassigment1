@@ -1,164 +1,508 @@
+<div align="center">
+
 # Quota-Aware User Storage Manager
 
-A Linux Bash project that monitors configured user home directories against storage quotas, identifies major storage consumers, creates warning reports, and prepares a safe cleanup plan.
+**A safe, report-driven Linux storage auditing and cleanup utility built with Bash.**
 
-**Safety:** read-only by default. It never automatically deletes files. Even with `--apply`, each file requires typing `DELETE` separately.
+Monitor user home directories · Detect quota pressure · Identify large files · Plan cleanup without accidental deletion
 
-## Features
-- Reads configured users, home directories, quotas, and warning thresholds.
-- Verifies accounts and registered home directories using `getent passwd`.
-- Calculates usage using `du` and finds large files using `find`.
-- Ranks storage consumers using `sort` and uses `awk` for formatting.
-- Uses Bash loops, functions, input validation, and threshold comparisons.
-- Displays OK, WARNING, or QUOTA EXCEEDED using one decimal place of quota usage.
-- Generates timestamped usage reports and dry-run cleanup plans.
-- Supports an optional age filter for cleanup candidates with `--older-than-days N`.
-- Requires individual confirmation before every deletion.
+![Platform](https://img.shields.io/badge/platform-Linux-2f855a?style=for-the-badge&logo=linux&logoColor=white)
+![Shell](https://img.shields.io/badge/shell-Bash-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)
+![Dependencies](https://img.shields.io/badge/dependencies-GNU%20utilities-blue?style=for-the-badge)
+![Mode](https://img.shields.io/badge/default%20mode-read--only-success?style=for-the-badge)
 
-## Structure
-```text
-unixassigment1/
-├── storage_manager.sh
-├── config/users.conf
-├── reports/
-└── README.md
-```
+[Features](#-features) · [Architecture](#-how-it-works) · [Quick start](#-quick-start) · [Usage](#-usage) · [Safety](#-safety-model) · [Testing](#-testing)
 
-## Requirements
-Linux (Ubuntu/Debian/Fedora), Bash, GNU findutils/coreutils, and `getent`, `du`, `find`, `sort`, `awk`, `head`, and `realpath`. No third-party packages are required on a typical Linux system.
+</div>
 
-## Configuration
-Edit `config/users.conf`. Each non-comment line uses:
-```text
-username|absolute_home_directory|quota_in_MB|warning_threshold_percent
-alice|/home/alice|2048|80
-bob|/home/bob|1024|75
-```
-Use real accounts. Check the registered home with `getent passwd alice`. Configured home must match the account database exactly. Quota and warning values must be positive integers without leading zeros (for example, use `8`, not `08`). Warning threshold must be 1–99. Usernames must match `^[A-Za-z_][A-Za-z0-9._-]*$`.
+---
 
-## Installation
-```bash
+## Overview
+
+The **Quota-Aware User Storage Manager** is a command-line utility for Linux system administrators and lab environments. It scans configured user home directories, compares disk usage against configurable quota thresholds, highlights storage-heavy files and directories, and creates a cleanup plan.
+
+It is designed around one principle:
+
+> **Inspect first. Plan second. Delete only after explicit confirmation.**
+
+The default run is non-destructive. The optional \`--apply\` mode still requires the operator to type \`DELETE\` separately for every individual file. There is no bulk-delete confirmation.
+
+## ✨ Features
+
+| Capability | What it does |
+|---|---|
+| Quota monitoring | Calculates each configured user's home-directory usage against a quota |
+| Threshold alerts | Classifies usage as \`OK\`, \`WARNING\`, or \`QUOTA EXCEEDED\` |
+| Precision | Uses integer arithmetic in tenths of a percent for threshold comparisons |
+| Account validation | Checks users and registered home directories through \`getent\` |
+| Storage discovery | Lists the largest immediate entries and largest regular files |
+| Cleanup planning | Creates a dry-run list of files above a configurable size |
+| Age filtering | Optionally filters cleanup candidates with \`--older-than-days N\` |
+| Audit reports | Writes timestamped scan reports and cleanup-plan files |
+| Safe deletion | Requires a separate exact \`DELETE\` confirmation for each candidate |
+| Filename handling | Uses NUL-delimited file discovery and escaped paths in delete prompts |
+
+## 🧭 How it works
+
+### High-level workflow
+
+\`\`\`mermaid
+flowchart TD
+    A([Start]) --> B[Parse command-line options]
+    B --> C[Validate options and config file]
+    C --> D[Read user configuration]
+    D --> E{Valid user record?}
+    E -- No --> F[Log invalid configuration]
+    F --> D
+    E -- Yes --> G[Verify account with getent]
+    G --> H{Account and home valid?}
+    H -- No --> I[Log skipped user]
+    I --> D
+    H -- Yes --> J[Measure usage with du]
+    J --> K[Calculate percentage]
+    K --> L{Compare thresholds}
+    L --> M[Set OK / WARNING / QUOTA EXCEEDED]
+    M --> N[Find largest entries and files]
+    N --> O[Generate cleanup plan]
+    O --> P{--apply enabled?}
+    P -- No --> Q[Write reports]
+    P -- Yes --> R[Re-scan cleanup candidates]
+    R --> S{Type DELETE for this file?}
+    S -- Yes --> T[Delete this one file]
+    S -- No --> U[Skip this file]
+    T --> Q
+    U --> Q
+    Q --> V[Return highest status code]
+    V --> W([Finish])
+\`\`\`
+
+### Component view
+
+\`\`\`mermaid
+flowchart LR
+    CFG[(users.conf)] -->|user, home, quota, threshold| SCRIPT[storage_manager.sh]
+    SCRIPT --> GETENT[getent]
+    SCRIPT --> DU[du]
+    SCRIPT --> FIND[find]
+    SCRIPT --> SORT[sort]
+    SCRIPT --> AWK[awk]
+    GETENT --> VALID[Account and home validation]
+    DU --> METER[Usage calculation]
+    FIND --> DISCOVERY[Large-file discovery]
+    SORT --> DISCOVERY
+    AWK --> METER
+    VALID --> ENGINE[Quota analysis]
+    METER --> ENGINE
+    DISCOVERY --> PLAN[Cleanup plan]
+    ENGINE --> REPORT[(Timestamped report)]
+    PLAN --> PLANFILE[(Cleanup plan file)]
+    PLAN --> APPLY{Interactive --apply}
+    APPLY -->|Exact DELETE| REMOVE[Remove one confirmed file]
+    APPLY -->|Anything else| KEEP[Keep file]
+    REMOVE --> REPORT
+    KEEP --> REPORT
+\`\`\`
+
+### Quota classification
+
+The script calculates percentage usage in tenths of a percent:
+
+\`\`\`bash
+pct_x10=$(( usage_kb * 1000 / (quota * 1024) ))
+pct="$((pct_x10 / 10)).$((pct_x10 % 10))"
+
+if ((pct_x10 >= 1000)); then
+  status="QUOTA EXCEEDED"
+elif ((pct_x10 >= warning * 10)); then
+  status="WARNING"
+else
+  status="OK"
+fi
+\`\`\`
+
+This avoids rounding a value up before comparing it with a threshold. For an 80% warning threshold, 79.9% remains \`OK\`, while 80.0% becomes \`WARNING\`.
+
+## 🧰 Technology
+
+| Tool | Role |
+|---|---|
+| **Bash** | Main program, option parsing, validation, loops, and functions |
+| **getent** | Account and registered-home lookup |
+| **du** | Directory disk-usage measurement |
+| **find** | File discovery, size filtering, age filtering |
+| **sort** | Ranking files and entries |
+| **awk** | Human-readable size formatting |
+| **head** | Limiting displayed results |
+| **realpath** | Canonical path validation before deletion |
+| **tee** | Displaying scan output while writing the report |
+
+No third-party runtime packages are required on a typical GNU/Linux installation.
+
+## 🚀 Quick start
+
+### 1. Clone the repository
+
+\`\`\`bash
 git clone https://github.com/abhishekpasupathy/unixassigment1.git
 cd unixassigment1
 chmod +x storage_manager.sh
-```
-Edit `config/users.conf` and add a valid local user.
+\`\`\`
 
-## Running
-Default safe scan and dry run:
-```bash
+### 2. Check system requirements
+
+\`\`\`bash
+bash --version
+getent --version
+find --version
+\`\`\`
+
+The script expects Bash and GNU-compatible utilities, including \`find\` with \`-printf\` and \`sort\` with \`-z\`.
+
+### 3. Configure users
+
+Edit \`config/users.conf\`:
+
+\`\`\`text
+# username|absolute_home_directory|quota_in_MB|warning_threshold_percent
+alice|/home/alice|2048|80
+bob|/home/bob|1024|75
+\`\`\`
+
+Each non-comment row contains exactly four pipe-separated fields.
+
+**Configuration rules**
+
+- The username must match \`^[A-Za-z_][A-Za-z0-9._-]*$\`.
+- The home directory must be an absolute path.
+- The configured home must exactly match the home registered by \`getent passwd\`.
+- Quota and warning values must be positive integers **without leading zeros**. Use \`8\`, not \`08\`.
+- The warning threshold must be between 1 and 99.
+
+Verify an account and its registered home:
+
+\`\`\`bash
+getent passwd alice
+\`\`\`
+
+### 4. Run a safe scan
+
+\`\`\`bash
 ./storage_manager.sh
-```
-Other options:
-```bash
+\`\`\`
+
+The default run scans users, displays findings, and creates report files. It does not delete anything.
+
+## 🖥️ Usage
+
+### Command options
+
+| Option | Description |
+|---|---|
+| \`-c, --config FILE\` | Use a specific configuration file |
+| \`-n, --top N\` | Number of largest entries/files to display (default: 5) |
+| \`--large-file-mb N\` | Minimum file size for cleanup candidates (default: 10 MB) |
+| \`--older-than-days N\` | Include candidates matching GNU \`find -mtime +N\` |
+| \`--report-only\` | Generate reports without offering deletion |
+| \`--apply\` | Enable interactive, per-file deletion confirmation |
+| \`-h, --help\` | Display help and exit |
+
+### Examples
+
+Scan with the default configuration:
+
+\`\`\`bash
+./storage_manager.sh
+\`\`\`
+
+Show the top 10 entries and files:
+
+\`\`\`bash
 ./storage_manager.sh --top 10
+\`\`\`
+
+Plan cleanup for files at least 25 MB:
+
+\`\`\`bash
 ./storage_manager.sh --large-file-mb 25
-./storage_manager.sh --older-than-days 7
-./storage_manager.sh --config ./config/users.conf
+\`\`\`
+
+Include only candidates whose modification time satisfies GNU \`find -mtime +7\`:
+
+\`\`\`bash
+./storage_manager.sh --large-file-mb 25 --older-than-days 7
+\`\`\`
+
+Use a different configuration file:
+
+\`\`\`bash
+./storage_manager.sh --config ./config/lab-users.conf
+\`\`\`
+
+Run in report-only mode:
+
+\`\`\`bash
 ./storage_manager.sh --report-only
-```
+\`\`\`
 
-`--older-than-days N` adds `-mtime +N` to cleanup candidate discovery. For example, `--older-than-days 7` selects files whose modification time is more than seven 24-hour periods ago. This filter applies to the cleanup plan and interactive candidate list.
+Enable interactive cleanup:
 
-Interactive cleanup:
-```bash
+\`\`\`bash
 ./storage_manager.sh --apply
-```
-For each candidate, type exactly `DELETE` to remove only that file. Any other input skips it. The prompt escapes unusual filename characters (including newlines) for safe display, while the program retains the actual path for the deletion operation. Deletion is permanent; inspect every path before confirming. `--apply` requires an interactive terminal and cannot be combined with `--report-only`. Do not run with elevated privileges merely to bypass permissions.
+\`\`\`
 
-## Reports
-Each run creates two timestamped files in `reports/`:
-- `storage_report_YYYYMMDD_HHMMSS.txt` — scan output, usage, status, warnings, and deletion outcomes.
-- `cleanup_plan_YYYYMMDD_HHMMSS.txt` — proposed files, user names, and byte sizes.
+**Option constraints:** \`--apply\` requires an interactive terminal and cannot be combined with \`--report-only\`.
 
-The scan output is appended to the usage report. If `du` exits unsuccessfully, the report warns that usage may be understated because some paths were unreadable.
+### Interactive deletion example
 
-## Algorithm
-1. Parse options and validate configuration.
-2. Read user records with a Bash loop.
-3. Trim fields and validate usernames, quota, and warning values.
-4. Verify the account using `getent passwd`.
-5. Match configured home with the account database.
-6. Calculate usage with `du -skx`.
-7. Calculate quota percentage in tenths using integer arithmetic; display one decimal place without rounding up threshold comparisons.
-8. Compare against warning and quota thresholds.
-9. List largest entries and regular files.
-10. Add large files (and optionally age-filtered files) to the dry-run plan.
-11. In `--apply` mode, request exact confirmation separately for every candidate.
-12. Save reports and return the highest status code encountered.
+\`\`\`text
+Candidate: /home/alice/Downloads/old\\ archive.bin (250.00 MB)
+Type DELETE to remove this one file; anything else skips:
+\`\`\`
 
-## Sample output
-```text
+Enter the exact uppercase word \`DELETE\` to remove that candidate. Press Enter with any other value to skip it. The prompt uses Bash's escaped path representation, so newline characters in filenames cannot create fake prompt lines. The actual unmodified path is used for the filesystem operation.
+
+## 📊 Example output
+
+The following is an illustrative scan excerpt:
+
+\`\`\`text
+Quota-Aware User Storage Manager
+Mode: read-only dry run
+
+============================================================
 USER: alice
 HOME: /home/alice
 QUOTA: 2048 MB
 Usage: 1.25 GB (1280 MB)
 Quota usage: 62.5%
 Status: OK
+
+Largest entries:
+  800.00 MB  /home/alice/Downloads
+  300.00 MB  /home/alice/Documents
+
 Largest files (top 5):
   250.00 MB  /home/alice/Downloads/archive.zip
-Dry-run cleanup candidates:
-  [PLAN ONLY] 250.00 MB /home/alice/Downloads/archive.zip
-No file is deleted unless --apply is used and DELETE is typed for that individual file.
-```
+  120.00 MB  /home/alice/Videos/recording.mp4
 
-## Exit codes
-The script returns the highest code encountered while scanning configured users:
+Dry-run cleanup candidates (at least 10 MB):
+  [PLAN ONLY] 250.00 MB  /home/alice/Downloads/archive.zip
+
+Reports generated:
+  reports/storage_report_YYYYMMDD_HHMMSS.txt
+  reports/cleanup_plan_YYYYMMDD_HHMMSS.txt
+
+No file is deleted unless --apply is used and DELETE is typed for that individual file.
+\`\`\`
+
+### Status thresholds
+
+For a configured quota of 100 MB and a warning threshold of 80%:
+
+| Usage | Displayed percentage | Status |
+|---:|---:|---|
+| 79 MB | 79.0% | \`OK\` |
+| 80 MB | 80.0% | \`WARNING\` |
+| 99 MB | 99.0% | \`WARNING\` |
+| 100 MB | 100.0% | \`QUOTA EXCEEDED\` |
+| Above quota | 100.0% or higher | \`QUOTA EXCEEDED\` |
+
+The actual percentage is calculated from the integer KB value returned by \`du\`, so filesystem allocation and directory metadata affect the measured total.
+
+## 🗂️ Generated reports
+
+Each execution creates timestamped files inside \`reports/\`:
+
+\`\`\`text
+reports/
+├── storage_report_YYYYMMDD_HHMMSS.txt
+└── cleanup_plan_YYYYMMDD_HHMMSS.txt
+\`\`\`
+
+| File | Contents |
+|---|---|
+| \`storage_report_*.txt\` | Scan output, usage, status, warnings, and deletion outcomes |
+| \`cleanup_plan_*.txt\` | Candidate username, file size in bytes, and path |
+
+The scan output is appended to the report as it is displayed. If \`du\` exits unsuccessfully, the report includes a warning that usage may be understated because some paths were unreadable.
+
+## 🛡️ Safety model
+
+The project deliberately separates discovery from deletion.
+
+\`\`\`text
+             DEFAULT RUN
+                  |
+                  v
+          Scan and measure
+                  |
+                  v
+          Build cleanup plan
+                  |
+                  v
+            STOP: no rm
+
+
+            --apply RUN
+                  |
+                  v
+          Re-discover candidates
+                  |
+                  v
+          Display escaped path
+                  |
+                  v
+       Type DELETE for this file?
+             /           \\
+           YES            NO
+            |              |
+            v              v
+       Remove file       Keep file
+            \\              /
+             \\            /
+              v          v
+              Next candidate
+\`\`\`
+
+Safeguards implemented by the script:
+
+- **Read-only default:** a normal run never invokes file deletion.
+- **One confirmation per file:** every deletion requires exact \`DELETE\` input.
+- **Interactive terminal check:** \`--apply\` is rejected when standard input is not a terminal.
+- **Path checks:** symlinks and paths resolving outside the configured home are rejected.
+- **Regular files only:** cleanup discovery does not select directories.
+- **Filesystem boundary:** scans use \`-xdev\` to avoid crossing filesystem boundaries.
+- **Escaped prompt:** unusual filenames, including newline-containing names, are displayed safely.
+- **No bulk-delete command:** confirming one candidate does not authorize another.
+
+> **Important:** Deletion is permanent. Review the candidate path and its contents before confirming. Do not run the utility as root simply to bypass permission restrictions.
+
+## 🧪 Testing
+
+Use a disposable Linux virtual machine or a test system. Do not experiment with cleanup against important user data.
+
+### Create a scratch account and sample files
+
+\`\`\`bash
+sudo useradd -m -s /bin/bash qatest
+HOME_DIR="$(getent passwd qatest | cut -d: -f6)"
+
+sudo mkdir -p "$HOME_DIR/test files"
+sudo fallocate -l 3M "$HOME_DIR/test files/big file.bin"
+sudo fallocate -l 2M "$HOME_DIR/test files/"$'newline\\nfile.bin'
+sudo chown -R qatest:qatest "$HOME_DIR"
+
+printf 'qatest|%s|100|80\\n' "$HOME_DIR" > /tmp/quota-test.conf
+\`\`\`
+
+Run a read-only test:
+
+\`\`\`bash
+./storage_manager.sh --config /tmp/quota-test.conf --report-only
+echo $?
+\`\`\`
+
+### Suggested test matrix
+
+| Test | Expected result |
+|---|---|
+| Valid account and matching home | User is scanned |
+| Unknown account | User is skipped; contributes exit code 3 |
+| Configured home differs from \`getent\` | User is skipped; contributes exit code 3 |
+| Home is missing or unreadable | User is skipped; contributes exit code 3 |
+| Quota/warning value is \`08\` | Configuration row rejected |
+| Filename contains spaces | Path remains one candidate |
+| Filename contains a newline | Candidate prompt displays escaped path |
+| File is below size threshold | Not included in cleanup plan |
+| File is older than the selected age filter | Included only if it also meets the size threshold |
+| \`--apply --report-only\` | Argument error; no deletion |
+| \`--apply\` without an interactive terminal | Rejected; no deletion |
+| Confirmation is not exactly \`DELETE\` | Candidate is skipped |
+| Confirmation is exactly \`DELETE\` | Only that individual candidate is removed |
+
+### Threshold checks
+
+For a 100 MB quota and an 80% warning threshold, the target usage values are:
+
+| Measured usage from \`du\` | Expected percentage | Expected status | Expected exit code* |
+|---:|---:|---|---:|
+| 79 MB | 79.0% | \`OK\` | 0 |
+| 80 MB | 80.0% | \`WARNING\` | 1 |
+| 100 MB | 100.0% | \`QUOTA EXCEEDED\` | 2 |
+
+\*These exit codes assume this is the only configured user and no user is skipped. The script uses the highest code encountered across all scanned users.
+
+To get an exact measured target, compare against \`du -sk "$HOME_DIR"\` rather than relying only on the nominal sizes passed to \`fallocate\`. Filesystem block allocation and directory metadata contribute to the measured total.
+
+### Cleanup after testing
+
+\`\`\`bash
+sudo userdel -r qatest
+sudo rm -f /tmp/quota-test.conf
+\`\`\`
+
+## ↩️ Exit codes
+
+The script returns the **highest status code encountered** while processing configured users:
+
 | Code | Meaning |
 |---:|---|
-| 0 | All scanned users are OK |
-| 1 | At least one user is at WARNING |
-| 2 | At least one user has QUOTA EXCEEDED |
-| 3 | At least one user was skipped (account not found, home mismatch, or home missing/unreadable) |
+| \`0\` | All scanned users are OK |
+| \`1\` | At least one user is at WARNING |
+| \`2\` | At least one user has QUOTA EXCEEDED |
+| \`3\` | At least one user was skipped because the account was not found, the home did not match, or the home was missing/unreadable |
 
-A skipped user takes precedence over quota-exceeded and warning statuses because 3 is the highest code.
+For example, if one user is at WARNING and another is skipped, the final exit code is \`3\`.
 
-## Commands and concepts
-| Command/concept | Purpose |
-|---|---|
-| `du` | Calculates storage usage |
-| `find` | Locates regular files and large-file candidates |
-| `sort` | Ranks usage in descending order |
-| `awk` | Formats sizes and report values |
-| `getent` | Verifies users and home directories |
-| `mkdir` | Creates report directory |
-| `rm` | Removes one file after confirmation |
-| Bash loops/functions | Read records and organize the program |
+## ⚠️ Limitations
 
-## Validation and safety
-- Missing/unreadable config causes a clear error.
-- Quota and warning values must be positive integers without leading zeros.
-- Warning threshold must be 1–99.
-- Invalid usernames and malformed configuration lines are rejected.
-- Nonexistent accounts and missing/unreadable homes are skipped with warnings and contribute exit code 3.
-- Configured home paths must match `getent` records.
-- Scans stay on the home filesystem using `-xdev`.
-- Cleanup candidates are regular files, not directories.
-- Symlinks and paths outside the configured home are rejected.
-- Every deletion requires separate exact confirmation.
-- Default execution is non-destructive.
+- Measures configured home directories; it is not a replacement for kernel-enforced filesystem quotas.
+- Inaccessible files may be omitted. A non-zero \`du\` result produces an understated-usage warning, but the exact missing paths and their sizes cannot be measured.
+- Hard links and filesystem accounting can make apparent usage differ from quota accounting.
+- Cleanup candidates are based on size and optional modification age, not file importance. The operator must decide whether removal is safe.
+- **The cleanup list is generated twice in \`--apply\` mode, so it can differ from the plan file if files change in between.**
+- Uses GNU options such as \`find -printf\` and \`sort -z\`, which are unavailable on some Unix variants.
 
-## Course outcome mapping
-| Outcome | Project contribution |
+## 📁 Repository layout
+
+\`\`\`text
+unixassigment1/
+│
+├── config/
+│   └── users.conf             # User quota configuration
+│
+├── reports/                   # Generated reports and cleanup plans
+│
+├── storage_manager.sh         # Main Bash application
+│
+└── README.md                  # Project documentation
+\`\`\`
+
+## 🎓 Learning outcomes
+
+| Outcome | Project application |
 |---|---|
 | CO1 | Linux/Unix commands and shell scripting |
 | CO2 | File-system operations, filters, and pipelines |
 | CO3 | Algorithms, loops, validation, and conditional logic |
 | CO5 | Practical system-administration utility |
 | PO2 | Analyses storage-usage problems |
-| PO3 | Designs quota-monitoring and safe-cleanup solution |
+| PO3 | Designs a quota-monitoring and safe-cleanup solution |
 | PO5 | Uses Unix tools to implement the solution |
 | SDG 9 | Supports reliable digital infrastructure |
 | SDG 12 | Encourages responsible storage use and avoids unnecessary deletion |
 
-## Limitations
-- Measures configured home directories; not a replacement for kernel-enforced filesystem quotas.
-- Inaccessible files may be omitted; a non-zero `du` result produces an understated-usage warning, but the exact missing paths and their sizes cannot be measured.
-- Hard links and filesystem accounting can make apparent usage differ from quota accounting.
-- Cleanup candidates are based on size and optional modification age, not importance. The operator decides whether removal is safe.
-- The cleanup list is generated twice in `--apply` mode, so it can differ from the plan file if files change in between.
-- Uses GNU options such as `find -printf` and `sort -z`, unavailable on some Unix variants.
+## 👤 Author
 
-## Author
 **Abhishek Pasupathy**  
 Unix Assignment — Quota-Aware User Storage Manager
+
+---
+
+<div align="center">
+
+**Built for safer, clearer Linux storage administration.**
+
+[Back to top](#quota-aware-user-storage-manager)
+
+</div>
