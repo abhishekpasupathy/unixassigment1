@@ -103,6 +103,91 @@ flowchart LR
     KEEP --> REPORT
 \`\`\`
 
+### Visual walkthrough: scan lifecycle
+
+This sequence diagram shows the interaction between the operator, the Bash script, Linux account tools, filesystem utilities, and report files.
+
+\`\`\`mermaid
+sequenceDiagram
+    autonumber
+    actor Admin as Administrator
+    participant Bash as storage_manager.sh
+    participant Config as users.conf
+    participant OS as getent / filesystem
+    participant Report as reports/
+
+    Admin->>Bash: Run script with options
+    Bash->>Config: Read configured user rows
+    Config-->>Bash: username, home, quota, warning
+    Bash->>OS: Verify account and home
+    OS-->>Bash: Account details / validation result
+    Bash->>OS: du -skx home
+    OS-->>Bash: Usage in KB
+    Bash->>Bash: Calculate percentage and status
+    Bash->>OS: find largest files and cleanup candidates
+    OS-->>Bash: Sorted file records
+    Bash->>Report: Append scan output and plan
+    Bash-->>Admin: Display usage, status, and candidates
+\`\`\`
+
+### Visual walkthrough: quota status machine
+
+\`\`\`mermaid
+stateDiagram-v2
+    [*] --> Measuring
+    Measuring --> Calculating: du returns usage
+    Measuring --> Skipped: usage cannot be measured
+    Calculating --> OK: percentage below warning threshold
+    Calculating --> Warning: percentage reaches warning threshold
+    Calculating --> Exceeded: usage reaches or exceeds quota
+    OK --> [*]
+    Warning --> [*]
+    Exceeded --> [*]
+    Skipped --> [*]
+\`\`\`
+
+### Visual walkthrough: one-file confirmation
+
+The confirmation is deliberately a per-file decision. A confirmation never carries over to the next candidate.
+
+\`\`\`mermaid
+sequenceDiagram
+    actor Admin as Administrator
+    participant Script as storage_manager.sh
+    participant FS as Filesystem
+
+    Script->>FS: Discover cleanup candidates
+    FS-->>Script: Candidate path and size
+    Script->>Admin: Show escaped candidate path
+    Script->>Admin: Ask for exact DELETE
+    alt Input is exactly DELETE
+        Script->>FS: Validate canonical path
+        Script->>FS: rm this single file
+        FS-->>Script: Deletion result
+        Script-->>Admin: Report result
+    else Any other input
+        Script-->>Admin: Keep this file
+    end
+    Note over Script,Admin: Repeat with a fresh prompt for the next file
+\`\`\`
+
+### Visual walkthrough: output artifacts
+
+\`\`\`mermaid
+flowchart TB
+    RUN([One script execution]) --> SCAN[Scan output]
+    RUN --> PLAN[Candidate discovery]
+    SCAN --> TXT[storage_report timestamped .txt]
+    PLAN --> TSV[cleanup_plan timestamped .txt]
+    APPLY{Interactive apply?}
+    PLAN --> APPLY
+    APPLY -->|No| END([Finish without deletion])
+    APPLY -->|Yes| PROMPT[Confirm each candidate separately]
+    PROMPT --> RESULT[Record deletion or skip outcome]
+    RESULT --> TXT
+    RESULT --> END
+\`\`\`
+
 ### Quota classification
 
 The script calculates percentage usage in tenths of a percent:
