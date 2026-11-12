@@ -3,9 +3,9 @@
 set -o nounset
 set -o pipefail
 
-ROOT="$(cd -- "$(dirname -- "\${BASH_SOURCE[0]}")" && pwd -P)"
-CONFIG_FILE="\${CONFIG_FILE:-$ROOT/config/users.conf}"
-REPORT_DIR="\${REPORT_DIR:-$ROOT/reports}"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+CONFIG_FILE="${CONFIG_FILE:-$ROOT/config/users.conf}"
+REPORT_DIR="${REPORT_DIR:-$ROOT/reports}"
 TOP_N=5
 LARGE_FILE_MB=10
 OLDER_THAN_DAYS=""
@@ -81,8 +81,8 @@ valid_uint() { [[ "$1" =~ ^[1-9][0-9]*$ ]]; }
 
 trim() {
   local value="$1"
-  value="\${value#"\${value%%[![:space:]]*}"}"
-  value="\${value%"\${value##*[![:space:]]}"}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
   printf '%s' "$value"
 }
 
@@ -92,7 +92,7 @@ find_cleanup_candidates() {
   if [[ -n "$OLDER_THAN_DAYS" ]]; then
     age_args=(-mtime "+$OLDER_THAN_DAYS")
   fi
-  find "$home" -xdev -type f -size "+$((min_bytes - 1))"c "\${age_args[@]}" \
+  find "$home" -xdev -type f -size "+$((min_bytes - 1))"c "${age_args[@]}" \
     -printf '%s\t%p\0' 2>/dev/null | sort -z -nr
 }
 
@@ -165,8 +165,8 @@ scan_user() {
 
   printf '\nLargest files (top %s):\n' "$TOP_N"
   while IFS= read -r -d '' rec; do
-    size="\${rec%%$'\t'*}"
-    path="\${rec#*$'\t'}"
+    size="${rec%%$'\t'*}"
+    path="${rec#*$'\t'}"
     if [[ "$size" =~ ^[0-9]+$ ]]; then
       printf '  %-10s %s\n' "$(human_size "$((size / 1024))")" "$path"
     fi
@@ -183,8 +183,8 @@ scan_user() {
   printf '):\n'
 
   while IFS= read -r -d '' rec; do
-    size="\${rec%%$'\t'*}"
-    path="\${rec#*$'\t'}"
+    size="${rec%%$'\t'*}"
+    path="${rec#*$'\t'}"
     [[ "$size" =~ ^[0-9]+$ ]] || continue
     ((count += 1))
     printf '  [PLAN ONLY] %s  %s\n' "$(human_size "$((size / 1024))")" "$path"
@@ -196,8 +196,8 @@ scan_user() {
     printf 'Interactive cleanup: deletion is permanent; review every path.\n'
     while IFS= read -r -d '' rec; do
       local canonical_home canonical_target answer
-      size="\${rec%%$'\t'*}"
-      path="\${rec#*$'\t'}"
+      size="${rec%%$'\t'*}"
+      path="${rec#*$'\t'}"
       canonical_home="$(cd -- "$home" && pwd -P)" || continue
       [[ -f "$path" && ! -L "$path" ]] || { log "Skipping symlink/non-file: $path"; continue; }
       canonical_target="$(realpath -- "$path" 2>/dev/null)" || continue
@@ -241,7 +241,7 @@ fi
 exit_status=0
 line_no=0
 
-while IFS='|' read -r user home quota warning extra || [[ -n "\${user:-}" ]]; do
+while IFS='|' read -r user home quota warning extra || [[ -n "${user:-}" ]]; do
   ((line_no += 1))
   user="$(trim "$user")"
   home="$(trim "$home")"
@@ -249,7 +249,7 @@ while IFS='|' read -r user home quota warning extra || [[ -n "\${user:-}" ]]; do
   warning="$(trim "$warning")"
   [[ -z "$user" || "$user" == \#* ]] && continue
 
-  if [[ -n "\${extra:-}" || "$home" != /* ]] ||
+  if [[ -n "${extra:-}" || "$home" != /* ]] ||
     ! valid_uint "$quota" || ! valid_uint "$warning"; then
     log "Invalid configuration at line $line_no; expected username|absolute_home|quota_MB|warning_percent (positive integers without leading zeros)" | tee -a "$REPORT"
     continue
@@ -266,7 +266,7 @@ while IFS='|' read -r user home quota warning extra || [[ -n "\${user:-}" ]]; do
   fi
 
   scan_user "$user" "$home" "$quota" "$warning" | tee -a "$REPORT"
-  scan_status=\${PIPESTATUS[0]}
+  scan_status=${PIPESTATUS[0]}
   if ((scan_status > exit_status)); then
     exit_status=$scan_status
   fi
